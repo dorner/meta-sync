@@ -1,0 +1,15 @@
+#!/usr/bin/env node
+
+let loaded = false;
+
+if (loaded) return process.kill();
+
+const program = require('commander');
+const debug = require('debug')('meta-sync');
+
+program
+  .command('copyhook', 'Copy the git hooks to local directories')
+  .command('all', 'Sync parent and sub-project directories', { isDefault: true} )
+  .parse(process.argv);
+
+loaded = true;

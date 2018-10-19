@@ -1,0 +1,150 @@
+#! /usr/bin/env node
+
+const getMetaFile = require('get-meta-file');
+const { join, dirname } = require('path');
+const fs = require('fs');
+const { execSync } = require('child_process');
+const prompt = require('syncprompt');
+
+const usage = `
+usage: 
+       meta sync
+
+Copies contents of shared directory to all subprojects. 
+If called from within a subproject, it will use the current project as the 
+source. Otherwise, the shared directory will be the source. 
+By default, the shared directory is called "shared" in the parent repo. You
+can change this by calling "meta config sharedDir {relative path}".
+`;
+
+if (process.argv[2] === '--help') return console.log(usage);
+
+const projectDir = getProjectDir();
+const parentDir = dirname(getMetaFile.getFileLocation());
+let sharedDir = `${parentDir}/shared`;
+let projects = [];
+let changed = false;
+
+/** Return the parent directory of the current project.
+ * @return {String}
+ */
+function getProjectDir() {
+  return execSync('git rev-parse --show-toplevel').toString().trim();
+}
+
+/** Read the meta configuration as a JSON blob. Store the projects and
+ * calculate the shared directory.
+ */
+function readMetaConfig() {
+  const meta = getMetaFile();
+  Object.keys(meta['projects']).forEach((key) => { projects.push(key)});
+  projects = projects.filter((project) => {
+    return !projectDir.includes(project);
+  });
+  if (meta['options'] && meta['options']['sharedDir']) {
+    sharedDir = `${parentDir}/${meta['options']['sharedDir']}`;
+  }
+}
+
+/**
+ * Return all files in a directory recursively.
+ * https://gist.github.com/timoxley/0cb5053dec107499c8aabad8dfd651ea
+ * @param {String} dir
+ * @param {Array<String>} allFiles
+ * @return {Array<String>}
+ */
+function rreaddir(dir, allFiles = []) {
+  const files = fs.readdirSync(dir).map(f => join(dir, f));
+  files.forEach(async function(file) {
+    const isDirectory = (fs.statSync(file)).isDirectory();
+    if (isDirectory) {
+      rreaddir(file, allFiles);
+    }
+    else {
+      allFiles.push(file);
+    }
+  });
+  return allFiles;
+}
+
+/**
+ * Compare the given relative file path to the different destinations
+ * (parents/siblings) and copy over if necessary.
+ * @param {String} file
+ */
+function compareAndCopyFile(file) {
+  const parentToChildren = projectDir === parentDir;
+  const origFile = parentToChildren ? `${sharedDir}/${file}` : file;
+  const currentFileExists = fs.existsSync(origFile);
+  let destinations = [];
+  // if true, we are copying from parent to children. Otherwise we are copying
+  // from a child to other siblings.
+  if (projectDir !== parentDir) {
+    destinations.push(sharedDir);
+  }
+  destinations = destinations.concat(
+    projects.map((project) => { return `${parentDir}/${project}`;})
+  );
+  destinations.forEach((dest) => {
+    const destFile = `${dest}/${file}`;
+    if (!currentFileExists) {
+      const response = prompt(`File ${file} does not exist in current repo! Delete ${destFile}?`);
+      if (response.toLowerCase() === 'y' && fs.existsSync(destFile)) {
+        fs.unlinkSync(destFile);
+      }
+      changed = true;
+      return;
+    }
+    else if (!fs.existsSync(destFile)) {
+      console.log(`Copying ${origFile} into ${destFile}`);
+      fs.copyFileSync(origFile, destFile);
+    }
+    else {
+      const destContents = fs.readFileSync(destFile);
+      const myContents = currentFileExists ? fs.readFileSync(origFile) : "";
+      if (!myContents.equals(destContents)) {
+        console.log(`Overwriting ${destFile} with ${origFile}`);
+        changed = true;
+        fs.copyFileSync(origFile, destFile);
+      }
+    }
+  });
+}
+
+/**
+ * Pull remote branch if necessary.
+ */
+function gitPull() {
+  // check to see if there is a remote branch
+  try {
+    execSync('git show-branch remotes/origin/', { stdio: 'ignore' });
+  }
+  catch(e) {
+    console.log(`Couldn't pull remote branch: ${e}`);
+    return;
+  }
+  execSync(`cd ${parentDir} && git pull`, { stdio: 'ignore' });
+  console.log("Pulled latest parent directory");
+}
+
+function main() {
+  gitPull();
+  readMetaConfig();
+  if (projectDir === parentDir) {
+    console.log("Syncing from parent to sub-projects");
+  }
+  else {
+    console.log("Syncing from current project to parent and other projects");
+  }
+  let fileList = rreaddir(sharedDir);
+  fileList.forEach((name) => {
+    const newName = name.replace(`${sharedDir}/`, '');
+    compareAndCopyFile(newName);
+  });
+  if (changed) {
+    console.log("Files in parent repo and sibling repos have changed! Please commit and push your changes!");
+    process.exit(1);
+  }
+}
+
+main();

@@ -1,0 +1,38 @@
+{
+  "name": "meta-sync",
+  "version": "0.0.0",
+  "description": "sync plugin for meta",
+  "main": "index.js",
+  "bin": {
+    "meta-sync": "./bin/meta-sync",
+    "meta-sync-all": "./bin/meta-sync-all",
+    "meta-sync-copyhook": "./bin/meta-sync-copyhook"
+  },
+  "scripts": {
+    "test": "npm test"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+ssh://git@github.com/dmorner/meta-sync.git"
+  },
+  "keywords": [
+    "meta-config",
+    "meta",
+    "repo",
+    "repository",
+    "metarepository",
+    "metarepo"
+  ],
+  "author": "dmorner@gmail.com",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/dmorner/meta-sync/issues"
+  },
+  "homepage": "https://github.com/dmorner/meta-sync#readme",
+  "dependencies": {
+    "commander": "^2.9.0",
+    "debug": "^2.3.3",
+    "get-meta-file": "0.0.5",
+    "syncprompt": "2.0.0"
+  }
+}

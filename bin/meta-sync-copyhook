@@ -1,0 +1,115 @@
+#!/usr/bin/env node
+
+const getMetaFile = require('get-meta-file');
+const fs = require('fs');
+const prompt = require('syncprompt');
+const path = require('path');
+
+const usage = `
+usage: 
+       meta sync copyhook
+
+Copies git hooks to ensure that you only use "meta git" and not "git" alone.
+Will create pre-commit, pre-push and post-checkout hooks. You can merge
+the hooks with existing ones.
+`;
+
+if (process.argv[2] === '--help') return console.log(usage);
+
+const baseHook = `#/usr/bin/bash
+
+# Calculate the original command that fired off the git command
+parentPID=$(ps -o ppid= $$)
+foundMeta="0"
+while [[ "$parentPID" != "0" ]]
+do
+  testName=$(ps -o command= $parentPID)
+  if [[ "$testName" == *"meta git"* ]]; then
+   foundMeta="1"
+   break
+  fi
+  parentPID=$(ps -o ppid= $parentPID | xargs)
+done
+
+`;
+const confirmHook = `
+if [[ "$foundMeta" == "0" ]]; then
+  echo "\\033[0;31mWARNING: You didn't use meta git! Continue? Y/N\\033[0m"
+  read -r response </dev/tty
+  if [[ "$response" != "Y" && "$response" != "y" ]]; then
+    echo "Exiting..."
+    exit 1
+  fi
+fi
+`;
+
+const commitHook = `${baseHook}
+${confirmHook}
+`;
+
+const pushHook = `${baseHook}
+if meta sync; then
+  echo "Sync complete"
+else
+  exit 1
+fi
+${confirmHook}
+`;
+
+const postCheckoutHook = `#/usr/bin/bash
+
+if [[ "$3" == "1" ]]; then
+  # Calculate the original command that fired off the git command
+  parentPID=$(ps -o ppid= $$)
+  foundMeta="0"
+  while [[ "$parentPID" != "0" ]]
+  do
+    testName=$(ps -o command= $parentPID)
+    if [[ "$testName" == *"meta git"* ]]; then
+     foundMeta="1"
+     break
+    fi
+    parentPID=$(ps -o ppid= $parentPID | xargs)
+  done
+
+  if [[ "$foundMeta" == "0" ]]; then
+    echo "\\033[0;31mWARNING: You didn't use meta git! You might want to run your command on your other repos as well!\\033[0m"
+  fi
+fi
+`;
+
+const meta = getMetaFile();
+const parentDir = path.dirname(getMetaFile.getFileLocation());
+
+const copyFile = (target, contents=baseHook) => {
+  fs.writeFileSync(target, contents, { mode: 0o700 });
+  console.log(`Copied hook to ${target}`)
+};
+
+const copyHook = (hook, currentHook) => {
+  if (fs.existsSync(currentHook)) {
+    const message = `Hook already exists in ${currentHook}! Do you want to...
+Overwrite (o) with the new hook;
+Merge (m) with the old hook (only do this if the hook is a bash script!);
+Cancel (x or Enter)?`;
+    const response = prompt(message).toLowerCase();
+    if (response.toLowerCase() === 'o') {
+      copyFile(currentHook, hook);
+    }
+    else if (response.toLowerCase() === 'm') {
+      const currentHookContents = fs.readFileSync(currentHook);
+      const newContents = currentHookContents.toString().replace(/#.*\n/, hook);
+      copyFile(currentHook, newContents);
+    }
+  }
+  else {
+    copyFile(currentHook, hook);
+  }
+};
+
+Object.entries(meta['projects']).forEach((entry) => {
+  const project = entry[0];
+  copyHook(commitHook, `${parentDir}/${project}/.git/hooks/pre-commit`);
+  copyHook(pushHook, `${parentDir}/${project}/.git/hooks/pre-push`);
+  copyHook(postCheckoutHook, `${parentDir}/${project}/.git/hooks/post-checkout`);
+});
