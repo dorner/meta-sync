@@ -1,17 +1,7 @@
 # meta-sync
 Plugin for meta to sync parent directories and the child projects. This
-is a development paradigm whereby the parent project has a shared directory
-which all sub-projects need to have and should always be kept up to date.
-
-By default, `meta-sync` will look in a directory called `shared` and
-will copy the contents of that directory to all sub-projects. E.g.
-if there are the following files:
-* `parent/shared/myfile`
-* `parent/shared/another/file`
-
-`meta-sync` will copy these to 
-* `parent/sub-project/myfile`
-* `parent/sub-project/another/file`
+is a development paradigm whereby sub-projects share files and directories
+which should be synced amongst them when committing or pushing.
 
 Usage:
 
@@ -24,7 +14,6 @@ meta sync
 meta-sync comes with a set of git hooks which will ensure the following:
 * It will complain if you use `git commit`, `git push`, or `git checkout`
 instead of `meta git commit`, `meta git push` or `meta git checkout`.
-You can opt to continue your command.
 * It will automatically call `meta sync` whenever you are about to push
 your commits. If the sync caused any file changes, it will abort the push.
 (You can just push again if you want to ignore it since the files will
@@ -37,16 +26,36 @@ or skip.
 
 ## Configuration
 
-meta-sync uses [meta-config](https://github.com/dorner/meta-config) to configure
-the share settings.
+The directories to sync need to live in the `.meta` file in the parent
+repo. The format is as follows:
+```json
+{
+  "config": {
+    "sync": {
+      "some-path/some-file": "*",
+      "some-path/some-directory": ["project1", "project2"],
+      "some-path/*.rb": ["project1", "project3"]
+    }
+  }
+}
+```
 
-```bash
-# Set the directory to share. Default is ./shared
-meta config sharedDir ./my-shared-dir
+A directory path implies all files recursively in that directory, i.e. it is 
+equivalent to `some-path/some-directory/**/*`. A "*" in the value indicates
+the file or directory should be shared across all subprojects.
+
+If no configuration is provided, the following configuration is inferred:
+```json
+{
+  "config": {
+    "sync": {
+      "shared": "*"  
+    }
+  }
+}
 ```
 
 ## Note
 
-If running `meta sync` from inside a child project, the plugin will
-sync the *child's files* to the parent and all siblings. If running
-from the inside the parent, it will sync the parent to all children.
+`meta-sync` will use the current project as the source of the files to sync
+over. Deleting a file will sync the deletion to the other projects.

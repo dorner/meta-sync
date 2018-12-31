@@ -5,25 +5,24 @@ const { join, dirname } = require('path');
 const fs = require('fs');
 const { execSync } = require('child_process');
 const prompt = require('syncprompt');
+const glob = require('glob');
 
 const usage = `
 usage: 
        meta sync
 
-Copies contents of shared directory to all subprojects. 
-If called from within a subproject, it will use the current project as the 
-source. Otherwise, the shared directory will be the source. 
-By default, the shared directory is called "shared" in the parent repo. You
-can change this by calling "meta config sharedDir {relative path}".
+Copies contents of shared directory/ies to all sibling projects. 
+Will use the current project as the source.
 `;
 
 if (process.argv[2] === '--help') return console.log(usage);
 
 const projectDir = getProjectDir();
 const parentDir = dirname(getMetaFile.getFileLocation());
-let sharedDir = `${parentDir}/shared`;
+let sourceProject = null;
 let projects = [];
 let changed = false;
+let syncConfig = {};
 
 /** Return the parent directory of the current project.
  * @return {String}
@@ -37,110 +36,84 @@ function getProjectDir() {
  */
 function readMetaConfig() {
   const meta = getMetaFile();
-  Object.keys(meta['projects']).forEach((key) => { projects.push(key)});
-  projects = projects.filter((project) => {
-    return !projectDir.includes(project);
-  });
-  if (meta['options'] && meta['options']['sharedDir']) {
-    sharedDir = `${parentDir}/${meta['options']['sharedDir']}`;
+  projects = Object.keys(meta['projects']);
+  sourceProject = projects.filter(project => projectDir.includes(project))[0];
+  if (sourceProject == null) {
+    throw `Current project directory ${projectDir} does not exist in meta configuration!`
   }
-}
-
-/**
- * Return all files in a directory recursively.
- * https://gist.github.com/timoxley/0cb5053dec107499c8aabad8dfd651ea
- * @param {String} dir
- * @param {Array<String>} allFiles
- * @return {Array<String>}
- */
-function rreaddir(dir, allFiles = []) {
-  const files = fs.readdirSync(dir).map(f => join(dir, f));
-  files.forEach(async function(file) {
-    const isDirectory = (fs.statSync(file)).isDirectory();
-    if (isDirectory) {
-      rreaddir(file, allFiles);
-    }
-    else {
-      allFiles.push(file);
-    }
-  });
-  return allFiles;
+  projects = projects.filter(project => project !== sourceProject);
+  if (meta['config'] && meta['config']['sync']) {
+    syncConfig = meta['config']['sync'];
+  }
+  else {
+    syncConfig = { "shared" : "*" }
+  }
 }
 
 /**
  * Compare the given relative file path to the different destinations
- * (parents/siblings) and copy over if necessary.
- * @param {String} file
+ * and copy over if necessary.
+ * @param {String} path
+ * @param {Array<String>} targets
  */
-function compareAndCopyFile(file) {
-  const parentToChildren = projectDir === parentDir;
-  const origFile = parentToChildren ? `${sharedDir}/${file}` : file;
-  const currentFileExists = fs.existsSync(origFile);
-  let destinations = [];
-  // if true, we are copying from parent to children. Otherwise we are copying
-  // from a child to other siblings.
-  if (projectDir !== parentDir) {
-    destinations.push(sharedDir);
+function compareAndCopyFiles(path, targets) {
+  if (!glob.hasMagic(path) && fs.statSync(path).isDirectory()) {
+    path = `${path}/**/*`;
   }
-  destinations = destinations.concat(
-    projects.map((project) => { return `${parentDir}/${project}`;})
-  );
-  destinations.forEach((dest) => {
-    const destFile = `${dest}/${file}`;
-    if (!currentFileExists) {
-      const response = prompt(`File ${file} does not exist in current repo! Delete ${destFile}?`);
-      if (response.toLowerCase() === 'y' && fs.existsSync(destFile)) {
-        fs.unlinkSync(destFile);
-      }
+  const sourceFiles = glob.sync(`${projectDir}/${path}`, { nodir: true} ).
+    map(file => file.replace(projectDir, ''));
+  for (const target of targets) {
+    const targetBaseDir = `${parentDir}/${target}`;
+    let targetFiles = glob.sync(`${targetBaseDir}/${path}`, { nodir: true}).
+      map(file => file.replace(targetBaseDir, ''));
+    console.debug(`Path ${path} Target ${target} targetfiles ${targetFiles} targetBaseDir ${targetBaseDir}`)
+    // handle deletions
+    const deletedFiles = targetFiles.filter(file => !sourceFiles.includes(file));
+    console.debug(`Deleted files: ${deletedFiles}`);
+    targetFiles = targetFiles.filter(file => !deletedFiles.includes(file));
+    for (const file of deletedFiles) {
+      console.log(`${file} does not exist in source project ${sourceProject}, deleting...`);
+      fs.unlinkSync(`${targetBaseDir}${file}`);
       changed = true;
-      return;
     }
-    else if (!fs.existsSync(destFile)) {
-      console.log(`Copying ${origFile} into ${destFile}`);
-      fs.copyFileSync(origFile, destFile);
-    }
-    else {
-      const destContents = fs.readFileSync(destFile);
-      const myContents = currentFileExists ? fs.readFileSync(origFile) : "";
-      if (!myContents.equals(destContents)) {
-        console.log(`Overwriting ${destFile} with ${origFile}`);
+    for (const file of sourceFiles) {
+      if (fs.existsSync(`${targetBaseDir}${file}`)) {
+        console.log(`Overwriting ${file} in ${target} with contents from ${sourceProject}`);
+        fs.copyFileSync(`${projectDir}${file}`, `${targetBaseDir}${file}`);
+        //TODO compare old and new files first to update "changed"
+      }
+      else {
+        console.log(`Creating file ${file} in project ${target}`);
+        fs.copyFileSync(`${projectDir}${file}`, `${targetBaseDir}${file}`);
         changed = true;
-        fs.copyFileSync(origFile, destFile);
       }
     }
-  });
+  }
 }
 
 /**
  * Pull remote branch if necessary.
  */
 function gitPull() {
-  // check to see if there is a remote branch
-  try {
-    execSync('git show-branch remotes/origin/', { stdio: 'ignore' });
+  for (const project of projects) {
+    try {
+      execSync(`cd ${parentDir}/${project} && git show-branch remotes/origin/`, { stdio: 'ignore' });
+    }
+    catch(e) {
+      console.log(`Couldn't pull remote branch for ${project}: ${e}`);
+      return;
+    }
+    execSync(`cd ${parentDir}/${project} && git pull`, { stdio: 'ignore'} );
   }
-  catch(e) {
-    console.log(`Couldn't pull remote branch: ${e}`);
-    return;
-  }
-  execSync(`cd ${parentDir} && git pull`, { stdio: 'ignore' });
-  console.log("Pulled latest parent directory");
+  console.debug("Pulled latest parent directories");
 }
 
 function main() {
   gitPull();
   readMetaConfig();
-  if (projectDir === parentDir) {
-    console.log("Syncing from parent to sub-projects");
+  for (const [path, targets] of Object.entries(syncConfig)) {
+    compareAndCopyFiles(path, targets === "*" ? projects : targets);
   }
-  else {
-    console.log("Syncing from current project to parent and other projects");
-  }
-  let fileList = rreaddir(sharedDir);
-  fileList.forEach((name) => {
-    const newName = name.replace(`${sharedDir}/`, '');
-    compareAndCopyFile(newName);
-  });
   if (changed) {
     console.log("Files in parent repo and sibling repos have changed! Please commit and push your changes!");
     process.exit(1);

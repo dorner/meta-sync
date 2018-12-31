@@ -34,12 +34,7 @@ done
 `;
 const confirmHook = `
 if [[ "$foundMeta" == "0" ]]; then
-  echo "\\033[0;31mWARNING: You didn't use meta git! Continue? Y/N\\033[0m"
-  read -r response </dev/tty
-  if [[ "$response" != "Y" && "$response" != "y" ]]; then
-    echo "Exiting..."
-    exit 1
-  fi
+  echo "\\033[0;31mWARNING: You didn't use meta git! You might want to run your command on your other repos as well!\\033[0m"
 fi
 `;
 
