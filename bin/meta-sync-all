@@ -2,7 +2,7 @@
 
 const getMetaFile = require('get-meta-file');
 const { join, dirname } = require('path');
-const fs = require('fs');
+const fs = require('fs-extra');
 const { execSync } = require('child_process');
 const prompt = require('syncprompt');
 const glob = require('glob');
@@ -62,29 +62,37 @@ function compareAndCopyFiles(path, targets) {
   }
   const sourceFiles = glob.sync(`${projectDir}/${path}`, { nodir: true} ).
     map(file => file.replace(projectDir, ''));
+
   for (const target of targets) {
     const targetBaseDir = `${parentDir}/${target}`;
     let targetFiles = glob.sync(`${targetBaseDir}/${path}`, { nodir: true}).
       map(file => file.replace(targetBaseDir, ''));
-    console.debug(`Path ${path} Target ${target} targetfiles ${targetFiles} targetBaseDir ${targetBaseDir}`)
+
     // handle deletions
     const deletedFiles = targetFiles.filter(file => !sourceFiles.includes(file));
-    console.debug(`Deleted files: ${deletedFiles}`);
     targetFiles = targetFiles.filter(file => !deletedFiles.includes(file));
     for (const file of deletedFiles) {
-      console.log(`${file} does not exist in source project ${sourceProject}, deleting...`);
+      console.log(`Deleting ${file} in ${target} - does not exist in source project ${sourceProject}...`);
       fs.unlinkSync(`${targetBaseDir}${file}`);
       changed = true;
     }
+
     for (const file of sourceFiles) {
-      if (fs.existsSync(`${targetBaseDir}${file}`)) {
-        console.log(`Overwriting ${file} in ${target} with contents from ${sourceProject}`);
-        fs.copyFileSync(`${projectDir}${file}`, `${targetBaseDir}${file}`);
-        //TODO compare old and new files first to update "changed"
+      const targetFile = `${targetBaseDir}${file}`;
+      const sourceFile = `${projectDir}${file}`;
+      if (fs.existsSync(targetFile)) {
+        // check if the files are the same
+        const buf1 = fs.readFileSync(sourceFile);
+        const buf2 = fs.readFileSync(targetFile);
+        if (!buf1.equals(buf2)) {
+          console.log(`Overwriting ${file} in ${target} with contents from ${sourceProject}`);
+          fs.copySync(sourceFile, targetFile);
+          changed = true;
+        }
       }
       else {
-        console.log(`Creating file ${file} in project ${target}`);
-        fs.copyFileSync(`${projectDir}${file}`, `${targetBaseDir}${file}`);
+        console.log(`Creating ${file} in ${target} with contents from ${sourceProject}`);
+        fs.copySync(sourceFile, targetFile);
         changed = true;
       }
     }
